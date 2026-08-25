@@ -53,15 +53,15 @@ The PRD defines the full user-facing behavior. Representative forms are:
 ```bash
 # Create
 azd ai agent invoke "long task" --background
-azd ai agent invoke --agent-name my-agent "long task" --background --no-wait
+azd ai agent invoke "long task" --background --no-wait
 
 # Follow, steer, and cancel
-azd ai agent invoke --agent-name my-agent --continue
-azd ai agent invoke --agent-name my-agent "revised requirements" --continue
-azd ai agent invoke --agent-name my-agent --cancel
+azd ai agent invoke --continue
+azd ai agent invoke "revised requirements" --continue
+azd ai agent invoke --cancel
 ```
 
-`--agent-name` is the universal explicit agent selector. The existing two-positional `agent + message` form remains valid for compatibility. The complete and authoritative grammar is defined in [Agent selection and input grammar](#agent-selection-and-input-grammar).
+These shorthand forms assume that azd can auto-detect the agent. Explicit agent selection and legacy positional forms are defined in [Agent selection and input grammar](#agent-selection-and-input-grammar).
 
 ## Existing implementation
 
