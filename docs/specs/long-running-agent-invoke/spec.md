@@ -1,3 +1,5 @@
+<!-- cspell:ignore checkpointed conv exterrors httptest nonterminal omitempty sess unreplayable -->
+
 # Long-Running Responses Support in `azd ai agent invoke`
 
 ## Status
@@ -46,31 +48,20 @@ These deviations are called out in [MVP limitations](#mvp-limitations) and [Futu
 
 ## Public CLI contract
 
-The PRD defines the full user-facing behavior. The new forms are summarized here to anchor the implementation:
+The PRD defines the full user-facing behavior. Representative forms are:
 
 ```bash
+# Create
 azd ai agent invoke "long task" --background
-azd ai agent invoke "long task" --background --no-wait
+azd ai agent invoke --agent-name my-agent "long task" --background --no-wait
 
-azd ai agent invoke --continue
-azd ai agent invoke "revised requirements" --continue
-azd ai agent invoke --cancel
+# Follow, steer, and cancel
+azd ai agent invoke --agent-name my-agent --continue
+azd ai agent invoke --agent-name my-agent "revised requirements" --continue
+azd ai agent invoke --agent-name my-agent --cancel
 ```
 
-Message-free operations in multi-agent projects use an explicit selector:
-
-```bash
-azd ai agent invoke --continue --agent-name my-agent
-azd ai agent invoke --cancel --agent-name my-agent
-```
-
-The existing named-message form remains valid:
-
-```bash
-azd ai agent invoke my-agent "revised requirements" --continue
-```
-
-Because the existing grammar treats one positional argument as a message, `azd ai agent invoke my-agent --continue` sends the text `my-agent`; it does not select that agent. Help and validation examples must direct message-free multi-agent operations to `--agent-name`.
+`--agent-name` is the universal explicit agent selector. The existing two-positional `agent + message` form remains valid for compatibility. The complete and authoritative grammar is defined in [Agent selection and input grammar](#agent-selection-and-input-grammar).
 
 ## Existing implementation
 
@@ -147,37 +138,114 @@ agentName    string
 
 `continueRun` is the internal name for the public `--continue` flag to avoid confusing the field with control flow.
 
-### Positional parsing
+### Agent selection and input grammar
 
-Preserve the current `[name] [message]` positional grammar for message operations. Do not reinterpret a single positional argument differently only because `--continue` or `--cancel` is present.
+Use one consistent rule: `--agent-name` explicitly selects the agent, while positional arguments normally represent input.
 
-For message-free operations:
+#### Agent selection
 
-- Agent auto-detection remains the default.
-- `--agent-name` explicitly selects an agent in a multi-agent project.
-- `--agent-endpoint` remains available outside an azd project.
+- `--agent-name <agent>` is valid for foreground create, background create, follow, steer, cancel, and file input.
+- Without `--agent-name`, azd auto-detects the agent or prompts when possible.
+- Two positional arguments preserve the existing `agent + message` form for compatibility.
+- `--agent-name` cannot be combined with a positional agent selector.
+- `--agent-endpoint` derives the agent from the URL and cannot be combined with `--agent-name` or a positional agent selector.
+
+#### Positional input
+
+The following table applies when `--input-file` is absent:
+
+| Positional arguments | Foreground create | `--background` | `--continue` | `--cancel` |
+| --- | --- | --- | --- | --- |
+| None | Reject unless `--input-file` supplies input | Reject unless `--input-file` supplies input | Follow current work | Cancel current Response |
+| One | Message | Message | Steering or next-turn message | Reject; cancel accepts no input |
+| Two | Agent + message | Agent + message | Agent + steering or next-turn message | Reject; cancel accepts no input |
+
+`--agent-name` may explicitly select the agent for any valid cell without changing how positional input is interpreted. With one positional argument, that argument remains the message. With two positional arguments, `--agent-name` is rejected because the first positional argument is already an agent selector.
+
+```bash
+azd ai agent invoke --agent-name my-agent "hello"
+azd ai agent invoke --agent-name my-agent "long task" --background
+azd ai agent invoke --agent-name my-agent --continue
+azd ai agent invoke --agent-name my-agent "revised input" --continue
+azd ai agent invoke --agent-name my-agent --cancel
+```
+
+A single positional argument with `--continue` is always input. Therefore:
+
+```bash
+azd ai agent invoke my-agent --continue
+```
+
+steers the auto-selected agent with the message `my-agent`; it does not select `my-agent` for message-free follow. The unambiguous named follow form is:
+
+```bash
+azd ai agent invoke --agent-name my-agent --continue
+```
+
+Likewise, `azd ai agent invoke my-agent --cancel` is invalid because cancel never accepts positional input. Use:
+
+```bash
+azd ai agent invoke --agent-name my-agent --cancel
+```
+
+#### File input compatibility
+
+`--input-file` supplies message input for foreground create, background create, and message-bearing `--continue`. It is never valid with `--cancel`.
+
+The preferred explicit forms are:
+
+```bash
+azd ai agent invoke --agent-name my-agent --input-file request.json
+azd ai agent invoke --agent-name my-agent --input-file revised.json --continue
+```
+
+Preserve the existing positional-agent forms for compatibility:
+
+```bash
+azd ai agent invoke my-agent --input-file request.json
+azd ai agent invoke my-agent --input-file revised.json --continue
+```
+
+When `--input-file` is present and there is exactly one positional argument without `--agent-name`, that positional argument is the legacy agent selector. Otherwise positional input and `--input-file` are mutually exclusive. Two positional arguments with `--input-file`, or `--agent-name` plus a positional argument and `--input-file`, are rejected.
+
+#### Generated guidance
+
+Generated `Next` commands and actionable errors preserve the selected agent context:
+
+- In a single-agent context where auto-detection is unambiguous, use the short form, such as `azd ai agent invoke --continue`.
+- When explicit selection is required, include `--agent-name <agent>`.
+- If the initiating command used `--agent-name`, preserve it in follow, steer, and cancel guidance.
+- Agent selection resolves the effective version from the current project/environment context. If that effective version changes, lifecycle resolution fails with missing-current-Response guidance rather than searching another version. Explicit cross-version targeting is deferred with explicit Response targeting.
+
+Canonical explicit forms are:
+
+```text
+Follow: azd ai agent invoke --agent-name <agent> --continue
+Steer:  azd ai agent invoke --agent-name <agent> "<message>" --continue
+Cancel: azd ai agent invoke --agent-name <agent> --cancel
+```
 
 ### Validation
 
-Perform structural validation before project resolution, followed by protocol validation after protocol resolution.
+Perform structural validation before project resolution, followed by protocol validation after protocol resolution. Argument count and input validity follow the canonical grammar above; the additional cross-flag rules are:
 
 | Combination | Result |
 | --- | --- |
-| `--background` without a message or `--input-file` | Reject |
-| `--background` with a message or `--input-file` | Accept |
 | `--no-wait` without `--background` | Reject |
 | `--continue` with `--cancel` | Reject |
-| `--cancel` with a message or `--input-file` | Reject |
-| Message-free `--continue` with `--input-file` | Reject |
+| `--cancel` with any message or `--input-file` | Reject; cancel accepts no input |
+| Two positional arguments with `--input-file` | Reject; the file already supplies input |
+| `--agent-name` with a positional argument and `--input-file` | Reject; the file already supplies input and the agent was selected explicitly |
 | `--background` with `--continue` or `--cancel` | Reject |
 | `--no-wait` with `--continue` or `--cancel` | Reject |
-| `--continue` or `--cancel` with `--session-id` or `--new-session` | Reject; use the saved response context |
-| `--continue` or `--cancel` with `--conversation-id` or `--new-conversation` | Reject; use the saved response context |
-| `--agent-name` with a positional agent name | Reject |
+| `--continue` or `--cancel` with `--session-id` or `--new-session` | Reject; use the saved Response context |
+| `--continue` or `--cancel` with `--conversation-id` or `--new-conversation` | Reject; use the saved Response context |
+| `--agent-name` with a positional agent selector | Reject; specify the agent once |
+| `--agent-name` or a positional agent selector with `--agent-endpoint` | Reject; the endpoint identifies the agent |
 | New lifecycle operation with `--local` | Reject |
 | New lifecycle operation with Invocations or A2A | Reject after protocol resolution |
 | New lifecycle operation with `--output raw` | Reject before network access |
-| Message-free operation in an ambiguous project without `--agent-name` and without prompts | Reject with agent-selection guidance |
+| Agent selection is ambiguous and prompts are unavailable | Reject with `--agent-name` guidance |
 
 ## Responses HTTP contract
 
@@ -372,7 +440,7 @@ Use exponential reconnect delays starting at one second and capped at 30 seconds
 
 1. Retrieve the current Response snapshot once when possible.
 2. Persist the latest known local state.
-3. Print the Response ID and `azd ai agent invoke --continue` guidance. Keep the cursor internal.
+3. Print the Response ID and follow guidance using the [generated-guidance rules](#generated-guidance). Keep the cursor internal.
 4. Return a classified error without cancelling server-side work.
 
 A successful event resets the consecutive reconnect failure count.
@@ -386,10 +454,12 @@ Before starting any ordinary foreground or background turn, inspect the saved ba
 1. If no record exists or the saved status is terminal, proceed.
 2. If the saved status is `queued` or `in_progress`, retrieve current service status.
 3. If the service reports terminal, update the record and proceed.
-4. If the service still reports active, reject the new turn and direct the user to `invoke <message> --continue` to steer or `invoke --cancel` to stop it.
+4. If the service still reports active, reject the new turn and offer follow, steer, and cancel using the [generated-guidance rules](#generated-guidance).
 5. A new background turn replaces a terminal record when its identity arrives. A successfully accepted ordinary foreground turn clears the terminal background record because the conversation advances outside the background lifecycle; retain the record if the foreground request fails before acceptance.
 
 This guard prevents accidental concurrent turns in the same conversation. The service may temporarily expose an active superseded Response and a queued replacement during steering, but only one handler executes at a time.
+
+The following behavior tables omit the agent selector for readability. Generated commands add `--agent-name <agent>` when explicit selection is required.
 
 While the saved background Response is active:
 
@@ -457,9 +527,11 @@ The saved Response can complete between status retrieval and replacement creatio
 
 Do not retry a replacement POST blindly.
 
-### Session and conversation support
+### Session, conversation, and agent context
 
-The background create captures its effective session and conversation. Follow, steer, and cancel inherit them; users do not repeat IDs.
+azd resolves the agent using `--agent-name`, a compatible positional agent selector, or auto-detection. It resolves the effective version separately, builds that exact `agentKey`, then loads the session, conversation, and current background Response stored under it. Agent selection does not override those saved lifecycle values.
+
+The background create captures its effective session and conversation. Follow, steer, and cancel inherit them; users do not repeat IDs. Lifecycle operations do not search other agents or versions, fall back across context keys, or create a session or conversation when saved state is missing.
 
 | Operation | No override | Session/conversation override |
 | --- | --- | --- |
@@ -468,14 +540,14 @@ The background create captures its effective session and conversation. Follow, s
 | Any create, active Response | Reject with follow/steer/cancel guidance | Reject with the same guidance |
 | Follow, steer, or cancel | Use saved context | Reject and tell the user to remove the override |
 
-Before any create, refresh a saved nonterminal Response. If still active, offer: follow with `invoke --continue`, steer with `invoke "<message>" --continue`, or stop with `invoke --cancel`. If terminal, preserve the old record until the new request succeeds: a foreground create then clears it, while a background create replaces it when the new Response identity is saved.
+Before any create, refresh a saved nonterminal Response. If still active, offer follow, steer, and cancel using the [generated-guidance rules](#generated-guidance). If terminal, preserve the old record until the new request succeeds: a foreground create then clears it, while a background create replaces it when the new Response identity is saved.
 
 Example:
 
 ```bash
-azd ai agent invoke "long task" --background --no-wait \
+azd ai agent invoke --agent-name my-agent "long task" --background --no-wait \
   --session-id sess_123 --conversation-id conv_456
-azd ai agent invoke --continue # reuses sess_123 and conv_456
+azd ai agent invoke --agent-name my-agent --continue # reuses sess_123 and conv_456
 ```
 
 Clearing local state does not cancel server-side work.
@@ -533,10 +605,11 @@ Use the existing UserConfig read-modify-write mechanism and accept its current l
 
 For `--continue` or `--cancel`:
 
-1. Resolve the existing agent context key.
-2. Load its one background record.
-3. Fail with actionable guidance if missing.
-4. Follow, steer, or cancel the Response ID in that record.
+1. Resolve the effective agent selector: `--agent-name`, otherwise a compatible positional selector, otherwise auto-detection or prompting.
+2. Resolve the effective version and build the exact existing agent context key.
+3. Load its one background record without searching another agent or version.
+4. Fail with actionable guidance if missing.
+5. Follow, steer, or cancel the Response ID in that record.
 
 Follow and cancel must not create a new hosted-agent session or conversation while resolving existing work. They must bypass normal-invoke helpers that auto-create version-backed sessions or conversations when saved state is absent.
 
@@ -604,7 +677,7 @@ Next:
   azd ai agent invoke --continue
 ```
 
-Print the status actually present in the identity-bearing event; do not assume `queued`. Save its sequence cursor internally without printing it.
+Print the status actually present in the identity-bearing event; do not assume `queued`. Save its sequence cursor internally without printing it. The example shows the unambiguous single-agent short form; include `--agent-name <agent>` in `Next` when explicit selection is required.
 
 On a failed reconnect sequence, print the Response ID for diagnostics and future recovery tooling.
 
@@ -631,10 +704,7 @@ Add stable extension error codes for at least:
 - Replay unavailable with no retrievable snapshot.
 - Steering rejected as stale or conflicting.
 
-Context errors must include the valid next action:
-
-- A lifecycle override tells the user to remove `--session-id`, `--new-session`, `--conversation-id`, or `--new-conversation` because the saved context is reused.
-- An active-context switch offers follow (`invoke --continue`), steer (`invoke "<message>" --continue`), and cancel (`invoke --cancel`).
+Context errors must follow [Generated guidance](#generated-guidance) and include the valid next action. A lifecycle override tells the user to remove `--session-id`, `--new-session`, `--conversation-id`, or `--new-conversation` because the saved context is reused.
 
 Lower-level HTTP and decoding helpers return wrapped plain errors. Classify at background operation boundaries using `internal/exterrors`. Use service errors for Azure HTTP failures and validation/dependency errors for local state and option failures.
 
@@ -685,7 +755,19 @@ A mechanical split of unrelated existing invoke code is optional and must not bl
 
 ### Command and validation tests
 
-Add table-driven coverage for every validation row, including named-agent message-free forms, endpoint mode, protocol auto-detection, raw rejection, and existing foreground regression behavior.
+Use table-driven tests for every cell in the canonical grammar and every additional validation row. Cover:
+
+- Zero, one, and two positional arguments for foreground, background, continue, and cancel.
+- `--agent-name` with message, file input, follow, steer, and cancel.
+- Rejection when `--agent-name` and a positional agent selector are both present.
+- Rejection when `--agent-endpoint` is combined with another agent selector.
+- File input for foreground, background, and message-bearing continue, with auto-detected, explicit, and legacy positional agent selection.
+- Rejection of two positional arguments plus `--input-file`, and `--agent-name` plus positional input plus `--input-file`.
+- The ambiguity guard that treats `invoke my-agent --continue` as steering input, not named follow.
+- Rejection of `invoke my-agent --cancel` because cancel accepts no input.
+- Exact agent/version context resolution for two-positional steering and message-free explicit selection.
+- Generated guidance that preserves `--agent-name` when explicit selection is required.
+- Endpoint mode, protocol auto-detection, raw rejection, and existing foreground regression behavior.
 
 ### SSE decoder tests
 
