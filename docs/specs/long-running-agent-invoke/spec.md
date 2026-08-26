@@ -313,7 +313,9 @@ Accept: text/event-stream
 
 Use the saved cursor for the current Response when available; otherwise omit `starting_after` and replay retained events from the beginning. The server uses strict-after semantics: when azd supplies its saved cursor, the first accepted event must have a greater sequence number.
 
-If the Response is terminal and replay has drained, print the terminal status/result and return. If replay is unavailable, retrieve the Response without `stream=true`; render its authoritative snapshot and status.
+Before opening a replay stream, inspect the saved local status. If it is already terminal, print that terminal status and return without a network request because the saved cursor has already consumed the terminal event.
+
+If an apparently active follow returns an empty stream, retrieve the Response once without `stream=true`. If the authoritative snapshot is terminal, persist and print its status instead of surfacing a missing-identity stream error. If it remains active, return actionable guidance that no new stream events were available. For other replay failures, retrieve and render the authoritative snapshot when possible.
 
 ### Cancel a Response
 
