@@ -907,22 +907,14 @@ func TestValidateInvokeOperationFlags(t *testing.T) {
 			flags:   invokeFlags{noWait: true, message: "hello"},
 			wantErr: "--no-wait requires --resumable",
 		},
-		{name: "continue accepts empty input", flags: invokeFlags{resume: true}},
-		{
-			name:    "continue rejects message",
-			flags:   invokeFlags{resume: true, message: "hello"},
-			wantErr: "--resume and --cancel do not accept a message or --input-file",
-		},
-		{
-			name:    "continue rejects file",
-			flags:   invokeFlags{resume: true, inputFile: "request.json"},
-			wantErr: "--resume and --cancel do not accept a message or --input-file",
-		},
+		{name: "resume accepts empty input", flags: invokeFlags{resume: true}},
+		{name: "resume accepts message", flags: invokeFlags{resume: true, message: "hello"}},
+		{name: "resume accepts file", flags: invokeFlags{resume: true, inputFile: "request.json"}},
 		{name: "cancel accepts empty input", flags: invokeFlags{cancel: true}},
 		{
 			name:    "cancel rejects input",
 			flags:   invokeFlags{cancel: true, message: "hello"},
-			wantErr: "--resume and --cancel do not accept a message or --input-file",
+			wantErr: "--cancel does not accept a message or --input-file",
 		},
 		{
 			name:    "continue and cancel are exclusive",
@@ -1004,9 +996,9 @@ func TestInvokeCommandLifecycleAgentNameIsUnambiguous(t *testing.T) {
 		want string
 	}{
 		{
-			name: "single positional remains resume input",
-			args: []string{"foo", "--resume"},
-			want: "--resume and --cancel do not accept a message or --input-file",
+			name: "single positional remains resume input with explicit agent",
+			args: []string{"foo", "--resume", "--agent-name", "bar", "--session-id", "sess_123"},
+			want: "--resume and --cancel use the saved session and conversation",
 		},
 		{
 			name: "agent name flag keeps resume message free",
@@ -1015,7 +1007,7 @@ func TestInvokeCommandLifecycleAgentNameIsUnambiguous(t *testing.T) {
 		},
 		{
 			name: "agent name flag rejects a positional agent name",
-			args: []string{"foo", "message", "--resume", "--agent-name", "bar"},
+			args: []string{"foo", "revised requirements", "--resume", "--agent-name", "bar"},
 			want: "--agent-name cannot be combined with a positional agent name",
 		},
 	}

@@ -132,9 +132,10 @@ suppressed in raw mode.
 Use --resumable with the Responses protocol to start work that continues running in
 the service if this command disconnects. The command remains attached until the work
 finishes. Add --no-wait to detach as soon as the service acknowledges the background
-work. Use --resume to reconnect to saved work and --cancel to cancel it. In multi-agent
-projects, use --agent-name to select the saved work for --resume or --cancel. Resumable
-invocation is remote-only, does not support raw output, and cannot be combined with --timeout.`,
+work. Use --resume without input to reconnect to saved work, or with input to revise
+the current turn. Use --cancel to cancel saved work. In multi-agent projects, use
+--agent-name to select the saved work for --resume or --cancel. Resumable operations
+are remote-only, do not support raw output, and cannot be combined with --timeout.`,
 		Example: `  # Invoke the remote agent on Foundry (auto-detects agent from azure.yaml)
   azd ai agent invoke "Hello!"
 
@@ -169,8 +170,9 @@ invocation is remote-only, does not support raw output, and cannot be combined w
   # Start resumable work and detach after the service acknowledges it
   azd ai agent invoke --resumable --no-wait "Run the long task"
 
-  # Resume or cancel saved resumable work
+  # Resume, revise, or cancel saved resumable work
   azd ai agent invoke --resume
+  azd ai agent invoke "Use the revised requirements" --resume
   azd ai agent invoke --cancel
 
   # Select an agent when reconnecting to saved work
@@ -373,7 +375,7 @@ invocation is remote-only, does not support raw output, and cannot be combined w
 		"Start resumable work that continues in the service if the command disconnects; remain attached until it finishes",
 	)
 	cmd.Flags().BoolVar(&flags.noWait, "no-wait", false, "Detach after the service acknowledges the resumable work")
-	cmd.Flags().BoolVar(&flags.resume, "resume", false, "Resume saved background work")
+	cmd.Flags().BoolVar(&flags.resume, "resume", false, "Resume or revise saved background work")
 	cmd.Flags().BoolVar(&flags.cancel, "cancel", false, "Cancel the saved current background Response")
 	cmd.Flags().StringVar(&flags.agentName, "agent-name", "", "Agent name for --resume or --cancel")
 
@@ -436,11 +438,11 @@ func validateInvokeOperationFlags(cmd *cobra.Command, flags *invokeFlags) error 
 			"provide a message as a positional argument, or use --input-file/-f to send a file",
 		)
 	}
-	if continuesOrCancels && hasInput {
+	if flags.cancel && hasInput {
 		return exterrors.Validation(
 			exterrors.CodeInvalidParameter,
-			"--resume and --cancel do not accept a message or --input-file",
-			"remove the input to reconnect to or cancel the saved Response",
+			"--cancel does not accept a message or --input-file",
+			"remove the input to cancel the saved Response",
 		)
 	}
 
@@ -608,6 +610,9 @@ func (a *InvokeAction) Run(ctx context.Context) error {
 		return a.a2aRemote(ctx)
 	default:
 		if a.flags.resume {
+			if a.flags.message != "" || a.flags.inputFile != "" {
+				return a.responsesSteerRemote(ctx)
+			}
 			return a.responsesResumeRemote(ctx)
 		}
 		if a.flags.cancel {
@@ -1299,8 +1304,8 @@ func (a *InvokeAction) ensureNoActiveBackgroundResponse(
 		return nil
 	}
 	return fmt.Errorf(
-		"background Response %s is still active; reconnect with `azd ai agent invoke --resume` or cancel it with "+
-			"`azd ai agent invoke --cancel`",
+		"background Response %s is still active; reconnect with `azd ai agent invoke --resume`, revise it with "+
+			"`azd ai agent invoke \"<message>\" --resume`, or cancel it with `azd ai agent invoke --cancel`",
 		record.ResponseID,
 	)
 }
